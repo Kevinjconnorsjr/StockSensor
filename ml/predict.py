@@ -1,6 +1,5 @@
 """Generates predictions using a trained StockLSTM model."""
 import os
-import sqlite3
 import numpy as np
 import pandas as pd
 import torch
@@ -8,15 +7,15 @@ import pickle
 import logging
 from model import StockLSTM, SEQUENCE_LENGTH, DIRECTION_LABELS
 from train import _load_data, _engineer_features
+from db_helper import get_connection, sync
 
 logger = logging.getLogger(__name__)
-DB_PATH = os.path.join(os.path.dirname(__file__), '..', 'stocksense.db')
 MODELS_DIR = os.path.join(os.path.dirname(__file__), 'models')
 
 
 def _latest_model(symbol: str) -> tuple[str, str] | tuple[None, None]:
-    conn = sqlite3.connect(DB_PATH)
-    conn.row_factory = sqlite3.Row
+    conn = get_connection()
+    conn.row_factory = __import__('sqlite3').Row
     row = conn.execute(
         "SELECT m.model_path FROM model_metadata m JOIN tickers t ON t.id=m.ticker_id WHERE t.symbol=? ORDER BY m.trained_at DESC LIMIT 1",
         (symbol,)
@@ -77,12 +76,13 @@ def predict(ticker_id: int, symbol: str, anthropic_key: str = "") -> dict:
     version = os.path.basename(model_path).replace('.pt', '').replace(f'{symbol}_v', '')
 
     # Save prediction to DB
-    conn = sqlite3.connect(DB_PATH)
+    conn = get_connection()
     conn.execute(
         "INSERT INTO predictions (ticker_id, direction, price_target, confidence, reasoning, model_version) VALUES (?,?,?,?,?,?)",
         (ticker_id, direction, price_target, confidence, reasoning, version)
     )
     conn.commit()
+    sync(conn)
     conn.close()
 
     return {

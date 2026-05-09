@@ -1,6 +1,5 @@
 """Training logic for the StockLSTM model."""
 import os
-import sqlite3
 import numpy as np
 import pandas as pd
 import torch
@@ -11,9 +10,9 @@ import pickle
 import logging
 from datetime import datetime
 from model import StockLSTM, SEQUENCE_LENGTH, DIRECTION_LABELS
+from db_helper import get_connection, sync
 
 logger = logging.getLogger(__name__)
-DB_PATH = os.path.join(os.path.dirname(__file__), '..', 'stocksense.db')
 MODELS_DIR = os.path.join(os.path.dirname(__file__), 'models')
 os.makedirs(MODELS_DIR, exist_ok=True)
 
@@ -21,7 +20,7 @@ DIRECTION_THRESHOLD = 0.005  # 0.5% move = directional
 
 
 def _load_data(ticker_id: int) -> pd.DataFrame:
-    conn = sqlite3.connect(DB_PATH)
+    conn = get_connection()
     prices = pd.read_sql(
         "SELECT date, close, adj_close, volume FROM price_history WHERE ticker_id=? ORDER BY date",
         conn, params=(ticker_id,)
@@ -126,12 +125,13 @@ def train(ticker_id: int, symbol: str, epochs: int = 50) -> dict:
         pickle.dump(scaler, f)
 
     # Save metadata to DB
-    conn = sqlite3.connect(DB_PATH)
+    conn = get_connection()
     conn.execute(
         "INSERT INTO model_metadata (ticker_id, data_points, accuracy, model_path) VALUES (?, ?, ?, ?)",
         (ticker_id, len(X), accuracy, model_path)
     )
     conn.commit()
+    sync(conn)
     conn.close()
 
     logger.info(f"Trained {symbol}: accuracy={accuracy:.3f}, data_points={len(X)}, path={model_path}")

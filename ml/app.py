@@ -1,7 +1,6 @@
 """Flask ML service — runs on port 5001, alongside the Next.js app."""
 import os
 import sys
-import sqlite3
 import logging
 from flask import Flask, request, jsonify
 from flask_cors import CORS
@@ -16,13 +15,15 @@ logger = logging.getLogger(__name__)
 app = Flask(__name__)
 CORS(app)
 
-DB_PATH = os.path.join(os.path.dirname(__file__), '..', 'stocksense.db')
 ANTHROPIC_KEY = os.getenv("ANTHROPIC_API_KEY", "")
+
+from db_helper import get_connection, sync, init_schema
+init_schema()
 
 
 def get_db():
-    conn = sqlite3.connect(DB_PATH)
-    conn.row_factory = sqlite3.Row
+    conn = get_connection()
+    conn.row_factory = __import__('sqlite3').Row
     return conn
 
 
@@ -75,6 +76,7 @@ def pull_history():
         ipo = records[0]['date']
         conn.execute("UPDATE tickers SET ipo_date=? WHERE id=?", (ipo, ticker_id))
     conn.commit()
+    sync(conn)
     conn.close()
 
     logger.info(f"Pulled {len(records)} price records for {symbol}")
@@ -117,6 +119,7 @@ def scrape():
                 (ticker_id, r['date'], r['open'], r['high'], r['low'], r['close'], r['adj_close'], r['volume'])
             )
         conn.commit()
+        sync(conn)
         conn.close()
         counts['prices'] = len(price_records)
 
@@ -145,6 +148,7 @@ def scrape():
         )
         saved += 1
     conn.commit()
+    sync(conn)
     conn.close()
     counts['events'] = saved
 
