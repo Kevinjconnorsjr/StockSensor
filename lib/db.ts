@@ -84,13 +84,10 @@ export async function getTickerBySymbol(symbol: string): Promise<Ticker | undefi
 
 export async function addTicker(symbol: string, name?: string): Promise<Ticker> {
   const sym = symbol.toUpperCase();
-  await supabase
-    .from('tickers')
-    .upsert({ symbol: sym, name: name ?? null }, { onConflict: 'symbol', ignoreDuplicates: true });
   const { data, error } = await supabase
     .from('tickers')
-    .select('*')
-    .eq('symbol', sym)
+    .upsert({ symbol: sym, name: name ?? null, active: true }, { onConflict: 'symbol' })
+    .select()
     .single();
   if (error) throw error;
   return data as Ticker;

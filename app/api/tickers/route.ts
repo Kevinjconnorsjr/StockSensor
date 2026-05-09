@@ -35,7 +35,7 @@ export async function POST(req: NextRequest) {
   for (const sym of list) {
     try {
       const existing = await getTickerBySymbol(sym);
-      if (existing) {
+      if (existing?.active) {
         results.push({ symbol: sym, status: 'already_tracked', id: existing.id });
         continue;
       }
