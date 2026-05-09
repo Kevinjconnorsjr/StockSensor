@@ -1,8 +1,8 @@
 [build]
-builder = "NIXPACKS"
+builder = "DOCKERFILE"
+dockerfilePath = "ml/Dockerfile"
 
 [deploy]
-startCommand = "cd ml && python app.py"
 healthcheckPath = "/status"
 healthcheckTimeout = 60
 restartPolicyType = "ON_FAILURE"

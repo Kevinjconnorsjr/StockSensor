@@ -205,6 +205,6 @@ def run_predict():
 # ---------------------------------------------------------------------------
 
 if __name__ == '__main__':
-    port = int(os.getenv('ML_PORT', 5001))
+    port = int(os.getenv('PORT', os.getenv('ML_PORT', 5001)))
     logger.info(f"Flask ML service starting on port {port}")
     app.run(host='0.0.0.0', port=port, debug=False)
