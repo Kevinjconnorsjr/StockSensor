@@ -1,35 +1,28 @@
-import cron from 'node-cron';
-import { getCronSchedule, runPipeline } from './pipeline';
-import { setSetting, getSetting } from './db';
+import { getSetting, setSetting } from './db';
 
-let task: cron.ScheduledTask | null = null;
+// node-cron doesn't work on Vercel serverless (no persistent process).
+// Scheduled runs are handled by Vercel Cron Jobs hitting /api/cron/run.
+// This module just tracks status and provides the manual trigger.
 
 export async function startCron(): Promise<void> {
-  if (task) return;
-  const schedule = await getCronSchedule();
-  task = cron.schedule(schedule, async () => {
-    await setSetting('last_run_at', new Date().toISOString());
-    await setSetting('last_run_status', 'running');
-    try {
-      await runPipeline();
-      await setSetting('last_run_status', 'success');
-    } catch {
-      await setSetting('last_run_status', 'error');
-    }
-  });
-}
-
-export function stopCron(): void {
-  task?.stop();
-  task = null;
+  // No-op on serverless — Vercel Cron handles scheduling via vercel.json
 }
 
 export async function getCronStatus() {
-  const schedule = await getCronSchedule();
-  return {
-    schedule,
-    running: !!task,
-    last_run_at: await getSetting('last_run_at'),
-    last_run_status: await getSetting('last_run_status'),
-  };
+  try {
+    const schedule = (await getSetting('cron_schedule')) ?? '0 7 * * *';
+    return {
+      schedule,
+      running: false,
+      last_run_at: await getSetting('last_run_at'),
+      last_run_status: await getSetting('last_run_status'),
+    };
+  } catch {
+    return {
+      schedule: '0 7 * * *',
+      running: false,
+      last_run_at: null,
+      last_run_status: null,
+    };
+  }
 }

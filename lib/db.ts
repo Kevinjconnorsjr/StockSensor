@@ -1,8 +1,7 @@
 import { createClient, type Client } from '@libsql/client';
-import fs from 'fs';
-import path from 'path';
 
 let _client: Client | null = null;
+let _initialized = false;
 
 function getClient(): Client {
   if (_client) return _client;
@@ -13,18 +12,73 @@ function getClient(): Client {
   return _client;
 }
 
+const SCHEMA_STATEMENTS = [
+  `CREATE TABLE IF NOT EXISTS tickers (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    symbol TEXT UNIQUE NOT NULL,
+    name TEXT,
+    ipo_date DATE,
+    active INTEGER NOT NULL DEFAULT 1,
+    added_at DATETIME NOT NULL DEFAULT (datetime('now'))
+  )`,
+  `CREATE TABLE IF NOT EXISTS price_history (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    ticker_id INTEGER NOT NULL REFERENCES tickers(id) ON DELETE CASCADE,
+    date DATE NOT NULL,
+    open REAL, high REAL, low REAL, close REAL,
+    adj_close REAL, volume INTEGER,
+    UNIQUE(ticker_id, date)
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_price_history_ticker_date ON price_history(ticker_id, date)`,
+  `CREATE TABLE IF NOT EXISTS news_events (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    ticker_id INTEGER NOT NULL REFERENCES tickers(id) ON DELETE CASCADE,
+    source TEXT NOT NULL,
+    title TEXT, body TEXT, url TEXT,
+    published_at DATETIME,
+    sentiment_score REAL,
+    sentiment_label TEXT,
+    scraped_at DATETIME NOT NULL DEFAULT (datetime('now'))
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_news_events_ticker_published ON news_events(ticker_id, published_at)`,
+  `CREATE TABLE IF NOT EXISTS predictions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    ticker_id INTEGER NOT NULL REFERENCES tickers(id) ON DELETE CASCADE,
+    predicted_at DATETIME NOT NULL DEFAULT (datetime('now')),
+    direction TEXT NOT NULL,
+    price_target REAL,
+    confidence REAL NOT NULL,
+    reasoning TEXT,
+    model_version TEXT
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_predictions_ticker_date ON predictions(ticker_id, predicted_at)`,
+  `CREATE TABLE IF NOT EXISTS model_metadata (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    ticker_id INTEGER NOT NULL REFERENCES tickers(id) ON DELETE CASCADE,
+    trained_at DATETIME NOT NULL DEFAULT (datetime('now')),
+    data_points INTEGER, accuracy REAL, model_path TEXT
+  )`,
+  `CREATE TABLE IF NOT EXISTS scrape_log (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    ticker_id INTEGER REFERENCES tickers(id) ON DELETE CASCADE,
+    source TEXT,
+    status TEXT NOT NULL,
+    message TEXT,
+    ran_at DATETIME NOT NULL DEFAULT (datetime('now'))
+  )`,
+  `CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT)`,
+  `INSERT OR IGNORE INTO settings(key,value) VALUES ('cron_schedule','0 7 * * *')`,
+  `INSERT OR IGNORE INTO settings(key,value) VALUES ('min_data_days','90')`,
+  `INSERT OR IGNORE INTO settings(key,value) VALUES ('retrain_interval_days','30')`,
+];
+
 export async function initDb(): Promise<void> {
-  const schemaPath = path.join(process.cwd(), 'db', 'schema.sql');
-  const schema = fs.readFileSync(schemaPath, 'utf-8');
-  // Split on semicolons, filter empties, run each statement
-  const stmts = schema
-    .split(';')
-    .map(s => s.trim())
-    .filter(s => s.length > 0 && !s.startsWith('--'));
+  if (_initialized) return;
   const db = getClient();
-  for (const sql of stmts) {
-    await db.execute(sql + ';');
+  for (const sql of SCHEMA_STATEMENTS) {
+    await db.execute(sql);
   }
+  _initialized = true;
 }
 
 export type Ticker = {
@@ -226,9 +280,13 @@ export async function getRecentScrapeLogs(limit = 50): Promise<ScrapeLog[]> {
 // --- Settings ---
 
 export async function getSetting(key: string): Promise<string | null> {
-  const res = await getClient().execute({ sql: 'SELECT value FROM settings WHERE key=?', args: [key] });
-  const r = res.rows[0] as unknown as { value: string } | undefined;
-  return r?.value ?? null;
+  try {
+    const res = await getClient().execute({ sql: 'SELECT value FROM settings WHERE key=?', args: [key] });
+    const r = res.rows[0] as unknown as { value: string } | undefined;
+    return r?.value ?? null;
+  } catch {
+    return null;
+  }
 }
 
 export async function setSetting(key: string, value: string): Promise<void> {
