@@ -7,15 +7,20 @@ import axios from 'axios';
 const ML_URL = process.env.ML_SERVICE_URL ?? 'http://localhost:5001';
 
 export async function GET() {
-  const tickers = await getAllTickers();
-  const enriched = await Promise.all(
-    tickers.map(async t => ({
-      ...t,
-      prediction: (await getLatestPrediction(t.id)) ?? null,
-      model: (await getLatestModelMetadata(t.id)) ?? null,
-    }))
-  );
-  return NextResponse.json(enriched);
+  try {
+    const tickers = await getAllTickers();
+    const enriched = await Promise.all(
+      tickers.map(async t => ({
+        ...t,
+        prediction: (await getLatestPrediction(t.id)) ?? null,
+        model: (await getLatestModelMetadata(t.id)) ?? null,
+      }))
+    );
+    return NextResponse.json(enriched);
+  } catch (e: unknown) {
+    const msg = e instanceof Error ? e.message : (e as { message?: string })?.message ?? String(e);
+    return NextResponse.json({ error: msg }, { status: 500 });
+  }
 }
 
 export async function POST(req: NextRequest) {
@@ -45,7 +50,8 @@ export async function POST(req: NextRequest) {
 
       results.push({ symbol: sym, status: 'added', id: ticker.id });
     } catch (e: unknown) {
-      results.push({ symbol: sym, status: 'error', error: e instanceof Error ? e.message : String(e) });
+      const msg = e instanceof Error ? e.message : (e as { message?: string })?.message ?? String(e);
+      results.push({ symbol: sym, status: 'error', error: msg });
     }
   }
 
