@@ -142,7 +142,7 @@ export async function upsertPricePoint(tickerId: number, point: PricePoint): Pro
 
 export async function getLatestPriceDate(tickerId: number): Promise<string | null> {
   const res = await getClient().execute({ sql: 'SELECT MAX(date) as d FROM price_history WHERE ticker_id=?', args: [tickerId] });
-  const r = res.rows[0] as { d: string | null } | undefined;
+  const r = res.rows[0] as unknown as { d: string | null } | undefined;
   return r?.d ?? null;
 }
 
@@ -227,7 +227,7 @@ export async function getRecentScrapeLogs(limit = 50): Promise<ScrapeLog[]> {
 
 export async function getSetting(key: string): Promise<string | null> {
   const res = await getClient().execute({ sql: 'SELECT value FROM settings WHERE key=?', args: [key] });
-  const r = res.rows[0] as { value: string } | undefined;
+  const r = res.rows[0] as unknown as { value: string } | undefined;
   return r?.value ?? null;
 }
 
