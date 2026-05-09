@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useCallback } from 'react';
 import Link from 'next/link';
-import { TrendingUp, TrendingDown, Minus, RefreshCw, Settings, Plus, X, BarChart2 } from 'lucide-react';
+import { TrendingUp, TrendingDown, Minus, RefreshCw, Settings, Plus, X, BarChart2, LogOut } from 'lucide-react';
 import type { Ticker, Prediction } from '@/lib/db';
 
 type EnrichedTicker = Ticker & {
@@ -129,6 +129,17 @@ export default function Dashboard() {
         <Link href="/settings" className="btn-secondary text-sm">
           <Settings className="w-4 h-4" />
         </Link>
+
+        <button
+          onClick={async () => {
+            await fetch('/api/auth/logout', { method: 'POST' });
+            window.location.href = '/login';
+          }}
+          className="btn-secondary text-sm"
+          title="Sign out"
+        >
+          <LogOut className="w-4 h-4" />
+        </button>
       </header>
 
       <main className="flex-1 p-4 max-w-7xl mx-auto w-full">

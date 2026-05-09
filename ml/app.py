@@ -17,14 +17,8 @@ CORS(app)
 
 ANTHROPIC_KEY = os.getenv("ANTHROPIC_API_KEY", "")
 
-from db_helper import get_connection, sync, init_schema
+from db_helper import get_client, init_schema
 init_schema()
-
-
-def get_db():
-    conn = get_connection()
-    conn.row_factory = __import__('sqlite3').Row
-    return conn
 
 
 # ---------------------------------------------------------------------------
@@ -70,18 +64,17 @@ def pull_history():
     if not records:
         return jsonify({"error": "no data", "count": 0}), 404
 
-    conn = get_db()
-    for r in records:
-        conn.execute(
-            "INSERT INTO price_history (ticker_id, date, open, high, low, close, adj_close, volume) VALUES (?,?,?,?,?,?,?,?) ON CONFLICT(ticker_id, date) DO NOTHING",
-            (ticker_id, r['date'], r['open'], r['high'], r['low'], r['close'], r['adj_close'], r['volume'])
-        )
+    db = get_client()
+    rows = [
+        {'ticker_id': ticker_id, 'date': r['date'], 'open': r['open'], 'high': r['high'],
+         'low': r['low'], 'close': r['close'], 'adj_close': r['adj_close'], 'volume': r['volume']}
+        for r in records
+    ]
+    db.table('price_history').upsert(rows, on_conflict='ticker_id,date').execute()
+
     if records:
         ipo = records[0]['date']
-        conn.execute("UPDATE tickers SET ipo_date=? WHERE id=?", (ipo, ticker_id))
-    conn.commit()
-    sync(conn)
-    conn.close()
+        db.table('tickers').update({'ipo_date': ipo}).eq('id', ticker_id).execute()
 
     logger.info(f"Pulled {len(records)} price records for {symbol}")
     return jsonify({"count": len(records), "ipo_date": records[0]['date'] if records else None})
@@ -107,31 +100,26 @@ def scrape():
     from sentiment import get_sentiment
 
     counts: dict[str, int] = {}
+    db = get_client()
 
-    # Price update
-    conn = get_db()
-    last_row = conn.execute("SELECT MAX(date) as d FROM price_history WHERE ticker_id=?", (ticker_id,)).fetchone()
-    last_date = last_row['d'] if last_row else None
-    conn.close()
+    # Get latest price date
+    result = db.table('price_history').select('date').eq('ticker_id', ticker_id).order('date', desc=True).limit(1).execute()
+    last_date = result.data[0]['date'] if result.data else None
 
     if last_date:
         price_records = fetch_recent_history(symbol, last_date)
-        conn = get_db()
-        for r in price_records:
-            conn.execute(
-                "INSERT INTO price_history (ticker_id, date, open, high, low, close, adj_close, volume) VALUES (?,?,?,?,?,?,?,?) ON CONFLICT(ticker_id, date) DO UPDATE SET close=excluded.close, adj_close=excluded.adj_close, volume=excluded.volume",
-                (ticker_id, r['date'], r['open'], r['high'], r['low'], r['close'], r['adj_close'], r['volume'])
-            )
-        conn.commit()
-        sync(conn)
-        conn.close()
+        rows = [
+            {'ticker_id': ticker_id, 'date': r['date'], 'open': r['open'], 'high': r['high'],
+             'low': r['low'], 'close': r['close'], 'adj_close': r['adj_close'], 'volume': r['volume']}
+            for r in price_records
+        ]
+        if rows:
+            db.table('price_history').upsert(rows, on_conflict='ticker_id,date').execute()
         counts['prices'] = len(price_records)
 
     # Get company name for better news search
-    conn = get_db()
-    ticker_row = conn.execute("SELECT name FROM tickers WHERE id=?", (ticker_id,)).fetchone()
-    company_name = ticker_row['name'] if ticker_row else ""
-    conn.close()
+    result = db.table('tickers').select('name').eq('id', ticker_id).single().execute()
+    company_name = (result.data or {}).get('name') or ''
 
     # Scrape all text sources
     all_items: list[dict] = []
@@ -141,20 +129,24 @@ def scrape():
     all_items += fetch_tweets(symbol)
 
     # Score sentiment and save
-    conn = get_db()
-    saved = 0
+    events_to_insert = []
     for item in all_items:
         text = (item.get('title') or '') + ' ' + (item.get('body') or '')
         s = get_sentiment(text.strip())
-        conn.execute(
-            "INSERT INTO news_events (ticker_id, source, title, body, url, published_at, sentiment_score, sentiment_label) VALUES (?,?,?,?,?,?,?,?)",
-            (ticker_id, item['source'], item.get('title'), item.get('body'), item.get('url'), item.get('published_at'), s['score'], s['label'])
-        )
-        saved += 1
-    conn.commit()
-    sync(conn)
-    conn.close()
-    counts['events'] = saved
+        events_to_insert.append({
+            'ticker_id': ticker_id,
+            'source': item['source'],
+            'title': item.get('title'),
+            'body': item.get('body'),
+            'url': item.get('url'),
+            'published_at': item.get('published_at'),
+            'sentiment_score': s['score'],
+            'sentiment_label': s['label'],
+        })
+
+    if events_to_insert:
+        db.table('news_events').insert(events_to_insert).execute()
+    counts['events'] = len(events_to_insert)
 
     logger.info(f"Scraped {symbol}: {counts}")
     return jsonify(counts)

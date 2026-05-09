@@ -10,7 +10,7 @@ import pickle
 import logging
 from datetime import datetime
 from model import StockLSTM, SEQUENCE_LENGTH, DIRECTION_LABELS
-from db_helper import get_connection, sync
+from db_helper import get_client
 
 logger = logging.getLogger(__name__)
 MODELS_DIR = os.path.join(os.path.dirname(__file__), 'models')
@@ -20,21 +20,26 @@ DIRECTION_THRESHOLD = 0.005  # 0.5% move = directional
 
 
 def _load_data(ticker_id: int) -> pd.DataFrame:
-    conn = get_connection()
-    prices = pd.read_sql(
-        "SELECT date, close, adj_close, volume FROM price_history WHERE ticker_id=? ORDER BY date",
-        conn, params=(ticker_id,)
-    )
-    events = pd.read_sql(
-        """SELECT DATE(published_at) as date, AVG(sentiment_score) as sentiment_avg,
-                  COUNT(*) as sentiment_count,
-                  SUM(CASE WHEN source='newsapi' THEN 1 ELSE 0 END) as news_count,
-                  SUM(CASE WHEN source='reddit' THEN 1 ELSE 0 END) as reddit_count
-           FROM news_events WHERE ticker_id=? AND sentiment_score IS NOT NULL
-           GROUP BY DATE(published_at)""",
-        conn, params=(ticker_id,)
-    )
-    conn.close()
+    db = get_client()
+
+    # Fetch price history
+    result = db.table('price_history').select('date,close,adj_close,volume').eq('ticker_id', ticker_id).order('date').execute()
+    prices = pd.DataFrame(result.data or [])
+
+    # Fetch news events, then aggregate in pandas (Supabase doesn't support GROUP BY)
+    result = db.table('news_events').select('published_at,sentiment_score,source').eq('ticker_id', ticker_id).not_.is_('sentiment_score', 'null').execute()
+    events_raw = pd.DataFrame(result.data or [])
+
+    if not events_raw.empty:
+        events_raw['date'] = pd.to_datetime(events_raw['published_at']).dt.strftime('%Y-%m-%d')
+        events = events_raw.groupby('date').agg(
+            sentiment_avg=('sentiment_score', 'mean'),
+            sentiment_count=('sentiment_score', 'count'),
+            news_count=pd.NamedAgg(column='source', aggfunc=lambda x: (x == 'newsapi').sum()),
+            reddit_count=pd.NamedAgg(column='source', aggfunc=lambda x: (x == 'reddit').sum()),
+        ).reset_index()
+    else:
+        events = pd.DataFrame(columns=['date', 'sentiment_avg', 'sentiment_count', 'news_count', 'reddit_count'])
 
     df = prices.merge(events, on='date', how='left')
     df['sentiment_avg'] = df['sentiment_avg'].fillna(0.0)
@@ -124,15 +129,13 @@ def train(ticker_id: int, symbol: str, epochs: int = 50) -> dict:
     with open(scaler_path, 'wb') as f:
         pickle.dump(scaler, f)
 
-    # Save metadata to DB
-    conn = get_connection()
-    conn.execute(
-        "INSERT INTO model_metadata (ticker_id, data_points, accuracy, model_path) VALUES (?, ?, ?, ?)",
-        (ticker_id, len(X), accuracy, model_path)
-    )
-    conn.commit()
-    sync(conn)
-    conn.close()
+    db = get_client()
+    db.table('model_metadata').insert({
+        'ticker_id': ticker_id,
+        'data_points': len(X),
+        'accuracy': accuracy,
+        'model_path': model_path,
+    }).execute()
 
     logger.info(f"Trained {symbol}: accuracy={accuracy:.3f}, data_points={len(X)}, path={model_path}")
     return {"accuracy": accuracy, "data_points": len(X), "model_path": model_path, "version": version}

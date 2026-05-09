@@ -7,23 +7,22 @@ import pickle
 import logging
 from model import StockLSTM, SEQUENCE_LENGTH, DIRECTION_LABELS
 from train import _load_data, _engineer_features
-from db_helper import get_connection, sync
+from db_helper import get_client
 
 logger = logging.getLogger(__name__)
 MODELS_DIR = os.path.join(os.path.dirname(__file__), 'models')
 
 
 def _latest_model(symbol: str) -> tuple[str, str] | tuple[None, None]:
-    conn = get_connection()
-    conn.row_factory = __import__('sqlite3').Row
-    row = conn.execute(
-        "SELECT m.model_path FROM model_metadata m JOIN tickers t ON t.id=m.ticker_id WHERE t.symbol=? ORDER BY m.trained_at DESC LIMIT 1",
-        (symbol,)
-    ).fetchone()
-    conn.close()
-    if not row:
+    db = get_client()
+    result = db.table('tickers').select('id').eq('symbol', symbol).maybe_single().execute()
+    if not result.data:
         return None, None
-    model_path = row['model_path']
+    ticker_id = result.data['id']
+    result = db.table('model_metadata').select('model_path').eq('ticker_id', ticker_id).order('trained_at', desc=True).limit(1).execute()
+    if not result.data:
+        return None, None
+    model_path = result.data[0]['model_path']
     scaler_path = model_path.replace('.pt', '_scaler.pkl')
     return model_path, scaler_path
 
@@ -61,7 +60,6 @@ def predict(ticker_id: int, symbol: str, anthropic_key: str = "") -> dict:
     last_close = float(df['price'].iloc[-1])
     price_target = round(last_close + float(price_delta[0]) * last_close, 2)
 
-    # Recent sentiment context for reasoning
     recent_sentiment = float(df['sentiment_avg'].tail(3).mean())
     recent_news_count = int(df['news_count'].tail(3).sum())
     ma7 = float(df['ma7'].iloc[-1])
@@ -72,18 +70,17 @@ def predict(ticker_id: int, symbol: str, anthropic_key: str = "") -> dict:
         recent_sentiment, recent_news_count, ma7, ma30, anthropic_key
     )
 
-    # Model version
     version = os.path.basename(model_path).replace('.pt', '').replace(f'{symbol}_v', '')
 
-    # Save prediction to DB
-    conn = get_connection()
-    conn.execute(
-        "INSERT INTO predictions (ticker_id, direction, price_target, confidence, reasoning, model_version) VALUES (?,?,?,?,?,?)",
-        (ticker_id, direction, price_target, confidence, reasoning, version)
-    )
-    conn.commit()
-    sync(conn)
-    conn.close()
+    db = get_client()
+    db.table('predictions').insert({
+        'ticker_id': ticker_id,
+        'direction': direction,
+        'price_target': price_target,
+        'confidence': confidence,
+        'reasoning': reasoning,
+        'model_version': version,
+    }).execute()
 
     return {
         "direction": direction,

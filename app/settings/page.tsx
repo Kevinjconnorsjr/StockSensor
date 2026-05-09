@@ -127,7 +127,9 @@ python app.py`}
             <h2 className="font-semibold">Database</h2>
           </div>
           <p className="text-sm text-slate-400">
-            Local SQLite database at <code className="bg-slate-700 px-1 rounded">stocksense.db</code> in the project root. No cloud sync required.
+            Supabase (PostgreSQL). Set <code className="bg-slate-700 px-1 rounded">SUPABASE_URL</code> and{' '}
+            <code className="bg-slate-700 px-1 rounded">SUPABASE_SERVICE_ROLE_KEY</code> in your environment variables.
+            Run <code className="bg-slate-700 px-1 rounded">supabase/schema.sql</code> once in the Supabase SQL Editor to create all tables.
           </p>
         </section>
       </main>
