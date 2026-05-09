@@ -40,7 +40,7 @@ export default function Dashboard() {
   const fetchTickers = useCallback(async () => {
     const res = await fetch('/api/tickers');
     const data = await res.json();
-    setTickers(data);
+    if (Array.isArray(data)) setTickers(data);
   }, []);
 
   const fetchCron = useCallback(async () => {
