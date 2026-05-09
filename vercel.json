@@ -1,0 +1,13 @@
+{
+  "framework": "nextjs",
+  "buildCommand": "next build",
+  "installCommand": "npm install",
+  "functions": {
+    "app/api/**": {
+      "maxDuration": 30
+    }
+  },
+  "env": {
+    "NEXT_RUNTIME": "nodejs"
+  }
+}

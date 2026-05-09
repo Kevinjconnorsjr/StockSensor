@@ -1,0 +1,143 @@
+"""Generates predictions using a trained StockLSTM model."""
+import os
+import sqlite3
+import numpy as np
+import pandas as pd
+import torch
+import pickle
+import logging
+from model import StockLSTM, SEQUENCE_LENGTH, DIRECTION_LABELS
+from train import _load_data, _engineer_features
+
+logger = logging.getLogger(__name__)
+DB_PATH = os.path.join(os.path.dirname(__file__), '..', 'stocksense.db')
+MODELS_DIR = os.path.join(os.path.dirname(__file__), 'models')
+
+
+def _latest_model(symbol: str) -> tuple[str, str] | tuple[None, None]:
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    row = conn.execute(
+        "SELECT m.model_path FROM model_metadata m JOIN tickers t ON t.id=m.ticker_id WHERE t.symbol=? ORDER BY m.trained_at DESC LIMIT 1",
+        (symbol,)
+    ).fetchone()
+    conn.close()
+    if not row:
+        return None, None
+    model_path = row['model_path']
+    scaler_path = model_path.replace('.pt', '_scaler.pkl')
+    return model_path, scaler_path
+
+
+def predict(ticker_id: int, symbol: str, anthropic_key: str = "") -> dict:
+    model_path, scaler_path = _latest_model(symbol)
+    if not model_path or not os.path.exists(model_path):
+        raise ValueError(f"No trained model for {symbol}. Run /train first.")
+
+    model = StockLSTM()
+    model.load_state_dict(torch.load(model_path, map_location='cpu'))
+    model.eval()
+
+    with open(scaler_path, 'rb') as f:
+        scaler = pickle.load(f)
+
+    df = _load_data(ticker_id)
+    df = _engineer_features(df)
+
+    feature_cols = ['price', 'volume', 'ma7', 'ma30', 'sentiment_avg', 'sentiment_count', 'news_count', 'reddit_count']
+    X_raw = df[feature_cols].tail(SEQUENCE_LENGTH).values.astype(float)
+    if len(X_raw) < SEQUENCE_LENGTH:
+        raise ValueError(f"Not enough recent data for prediction: {len(X_raw)} rows")
+
+    X_scaled = scaler.transform(X_raw)
+    X_tensor = torch.FloatTensor(X_scaled).unsqueeze(0)
+
+    with torch.no_grad():
+        logits, price_delta = model(X_tensor)
+        probs = torch.softmax(logits, dim=1)[0]
+        direction_idx = probs.argmax().item()
+        confidence = float(probs[direction_idx])
+        direction = DIRECTION_LABELS[direction_idx]
+
+    last_close = float(df['price'].iloc[-1])
+    price_target = round(last_close + float(price_delta[0]) * last_close, 2)
+
+    # Recent sentiment context for reasoning
+    recent_sentiment = float(df['sentiment_avg'].tail(3).mean())
+    recent_news_count = int(df['news_count'].tail(3).sum())
+    ma7 = float(df['ma7'].iloc[-1])
+    ma30 = float(df['ma30'].iloc[-1])
+
+    reasoning = _build_reasoning(
+        symbol, direction, confidence, price_target, last_close,
+        recent_sentiment, recent_news_count, ma7, ma30, anthropic_key
+    )
+
+    # Model version
+    version = os.path.basename(model_path).replace('.pt', '').replace(f'{symbol}_v', '')
+
+    # Save prediction to DB
+    conn = sqlite3.connect(DB_PATH)
+    conn.execute(
+        "INSERT INTO predictions (ticker_id, direction, price_target, confidence, reasoning, model_version) VALUES (?,?,?,?,?,?)",
+        (ticker_id, direction, price_target, confidence, reasoning, version)
+    )
+    conn.commit()
+    conn.close()
+
+    return {
+        "direction": direction,
+        "price_target": price_target,
+        "confidence": round(confidence, 4),
+        "reasoning": reasoning,
+        "model_version": version,
+    }
+
+
+def _build_reasoning(
+    symbol: str, direction: str, confidence: float, price_target: float,
+    last_close: float, sentiment: float, news_count: int,
+    ma7: float, ma30: float, anthropic_key: str
+) -> str:
+    if anthropic_key:
+        return _reasoning_via_claude(symbol, direction, confidence, price_target, last_close, sentiment, news_count, ma7, ma30, anthropic_key)
+    return _reasoning_rule_based(symbol, direction, confidence, price_target, last_close, sentiment, news_count, ma7, ma30)
+
+
+def _reasoning_rule_based(symbol, direction, confidence, price_target, last_close, sentiment, news_count, ma7, ma30) -> str:
+    parts = []
+    sent_desc = "positive" if sentiment > 0.1 else "negative" if sentiment < -0.1 else "neutral"
+    parts.append(f"Sentiment over the past 3 days averaged {sentiment:+.2f} ({sent_desc}).")
+    if news_count > 0:
+        parts.append(f"{news_count} news/social items collected recently.")
+    trend = "above" if ma7 > ma30 else "below"
+    parts.append(f"7-day MA ({ma7:.2f}) is {trend} 30-day MA ({ma30:.2f}), suggesting {'bullish' if trend == 'above' else 'bearish'} short-term trend.")
+    parts.append(f"Model confidence: {confidence*100:.0f}%. Predicted direction: {direction.upper()}. Price target: ${price_target:.2f} vs last close ${last_close:.2f}.")
+    return " ".join(parts)
+
+
+def _reasoning_via_claude(symbol, direction, confidence, price_target, last_close, sentiment, news_count, ma7, ma30, api_key) -> str:
+    try:
+        import anthropic
+        client = anthropic.Anthropic(api_key=api_key)
+        prompt = f"""You are a stock analysis AI. Generate a concise 2-3 sentence reasoning summary for this prediction:
+
+Ticker: {symbol}
+Direction: {direction.upper()}
+Price target: ${price_target:.2f} (last close: ${last_close:.2f})
+Model confidence: {confidence*100:.0f}%
+3-day avg sentiment: {sentiment:+.2f}
+Recent news/social items: {news_count}
+7-day MA: ${ma7:.2f}, 30-day MA: ${ma30:.2f}
+
+Explain WHY the model is predicting this direction based on the data. Be specific and factual."""
+
+        msg = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=200,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        return msg.content[0].text.strip()
+    except Exception as e:
+        logger.error(f"Claude API error for reasoning: {e}")
+        return _reasoning_rule_based(symbol, direction, confidence, price_target, last_close, sentiment, news_count, ma7, ma30)

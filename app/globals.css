@@ -1,0 +1,56 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --foreground: #f1f5f9;
+  --background: #0f172a;
+  --surface: #1e293b;
+  --border: #334155;
+  --muted: #64748b;
+}
+
+body {
+  background-color: var(--background);
+  color: var(--foreground);
+  font-family: system-ui, -apple-system, sans-serif;
+}
+
+.card {
+  @apply bg-slate-800 border border-slate-700 rounded-xl p-4;
+}
+
+.btn {
+  @apply px-4 py-2 rounded-lg font-medium transition-colors min-h-[44px] min-w-[44px] flex items-center justify-center;
+}
+
+.btn-primary {
+  @apply btn bg-indigo-600 hover:bg-indigo-500 text-white;
+}
+
+.btn-secondary {
+  @apply btn bg-slate-700 hover:bg-slate-600 text-slate-100;
+}
+
+.btn-danger {
+  @apply btn bg-red-700 hover:bg-red-600 text-white;
+}
+
+.badge-up {
+  @apply text-green-400 font-semibold;
+}
+
+.badge-down {
+  @apply text-red-400 font-semibold;
+}
+
+.badge-neutral {
+  @apply text-slate-400 font-semibold;
+}
+
+/* Recharts tooltip dark theme */
+.recharts-tooltip-wrapper .recharts-default-tooltip {
+  background-color: #1e293b !important;
+  border-color: #334155 !important;
+  color: #f1f5f9 !important;
+}
