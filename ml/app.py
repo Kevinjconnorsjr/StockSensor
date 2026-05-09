@@ -31,9 +31,13 @@ def get_db():
 # Health & status
 # ---------------------------------------------------------------------------
 
+@app.route('/')
+def index():
+    return jsonify({"service": "StockSensor ML", "status": "running", "endpoints": ["/status", "/validate/<symbol>", "/pull_history", "/scrape", "/train", "/predict"]})
+
 @app.route('/status')
 def status():
-    return jsonify({"ok": True, "db": os.path.exists(DB_PATH)})
+    return jsonify({"ok": True})
 
 
 # ---------------------------------------------------------------------------
