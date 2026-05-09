@@ -1,3 +1,5 @@
+export const dynamic = 'force-dynamic';
+
 import { NextRequest, NextResponse } from 'next/server';
 import { getAllTickers, addTicker, deactivateTicker, getTickerBySymbol, getLatestPrediction, getLatestModelMetadata } from '@/lib/db';
 import axios from 'axios';

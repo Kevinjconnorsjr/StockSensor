@@ -1,3 +1,5 @@
+export const dynamic = 'force-dynamic';
+
 import { NextRequest, NextResponse } from 'next/server';
 import { getCronStatus } from '@/lib/cron';
 import { setSetting } from '@/lib/db';
