@@ -1,3 +1,12 @@
+---
+title: StockSensor ML
+emoji: 📈
+colorFrom: indigo
+colorTo: purple
+sdk: docker
+pinned: false
+---
+
 # StockSense AI
 
 AI-powered stock tracker that correlates news, Reddit sentiment, and SEC filings to price history, then generates daily predictions using a locally-trained LSTM model.
